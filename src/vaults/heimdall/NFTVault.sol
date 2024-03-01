@@ -54,7 +54,7 @@ contract NFTVault is VaultBase, Owned {
     /// @return A snapshot of the vault's state.
     function doCreateVaultSnapshot() internal virtual override returns (bytes memory) {
         // make total supply snapshot here and return it:
-        return totalSupply;
+        return abi.encode(totalSupply);
     }
 
     /// @notice Checks the vault's status.
@@ -87,70 +87,13 @@ contract NFTVault is VaultBase, Owned {
         EVCClient.disableController(_msgSender());
     }
 
-    /// @notice Approves a spender to spend a certain amount.
-    /// @param spender The spender to approve.
-    /// @param amount The amount to approve.
-    /// @return A boolean indicating whether the approval was successful.
-    function approve(address spender, uint256 amount) public virtual override returns (bool) {
-        address msgSender = _msgSender();
-
-        address owner = _ownerOf[id];
-
-        require(msgSender == owner || isApprovedForAll[owner][msgSender], "NOT_AUTHORIZED");
-
-        getApproved[id] = spender;
-
-        emit Approval(owner, spender, id);
-    }
-
-    /// @notice Transfers an NFT with certain ID to recipient.
-    /// @param from Owner of the NFT with certain ID, or authorized third party
-    /// @param to The recipient of the transfer.
-    /// @param amount The amount shares to transfer.
-    /// @return A boolean indicating whether the transfer was successful.
-    function transferFrom(address from, address to, uint256 id) public virtual override callThroughEVC nonReentrant returns (bool) {
-        address msgSender = _msgSender();
-
-        createVaultSnapshot();
-
-        require(from == _ownerOf[id], "WRONG_FROM");
-
-        require(to != address(0), "INVALID_RECIPIENT");
-
-        require(
-            msgSender == from || isApprovedForAll[from][msgSender] || msgSender == getApproved[id],
-            "NOT_AUTHORIZED"
-        );
-
-        // Underflow of the sender's balance is impossible because we check for
-        // ownership above and the recipient's balance can't realistically overflow.
-        unchecked {
-            _balanceOf[from]--;
-
-            _balanceOf[to]++;
-        }
-
-        _ownerOf[id] = to;
-
-        delete getApproved[id];
-
-        emit Transfer(from, to, id);
-
-        // despite the fact that the vault status check might not be needed for shares transfer with current logic, it's
-        // added here so that if anyone changes the snapshot/vault status check mechanisms in the inheriting contracts,
-        // they will not forget to add the vault status check here
-        requireAccountAndVaultStatusCheck(msgSender);
-
-        return true;
-    }
-
     /// @notice Deposits an NFT with the certain id to the receiver.
     /// @param id The id of NFT.
     /// @param receiver The receiver of the NFT.
     function deposit(
         uint256 id,
         address receiver
-    ) public virtual override callThroughEVC nonReentrant {
+    ) public virtual callThroughEVC nonReentrant {
         address msgSender = _msgSender();
 
         createVaultSnapshot();
@@ -174,7 +117,7 @@ contract NFTVault is VaultBase, Owned {
         uint256 id,
         address receiver,
         address owner
-    ) public virtual override callThroughEVC nonReentrant {
+    ) public virtual callThroughEVC nonReentrant {
         address msgSender = _msgSender();
 
         createVaultSnapshot();
