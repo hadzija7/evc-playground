@@ -12,25 +12,37 @@ import "../VaultBase.sol";
 /// @title NFTVault
 /// @dev ERC721 contract is used as a collateral for the vault.
 /// @notice This is for test purposes only, do not use in production.
-contract NFTVault is VaultBase, Owned, ERC721 {
+contract NFTVault is VaultBase, Owned {
     using FixedPointMathLib for uint256;
 
+    /*//////////////////////////////////////////////////////////////
+                                 EVENTS
+    //////////////////////////////////////////////////////////////*/
+
+    event Deposit(address indexed caller, address indexed owner, uint256 id);
+    event Withdraw(
+        address indexed caller,
+        address indexed receiver,
+        address indexed owner,
+        uint256 id
+    );
     event SupplyCapSet(uint256 newSupplyCap);
 
     error SnapshotNotTaken();
     error SupplyCapExceeded();
 
-    uint256 internal _totalAssets;
     uint256 public supplyCap;
+    uint256 public totalSupply;
+    ERC721 public immutable asset;
 
     constructor(
         IEVC _evc,
-        ERC20 _asset,
-        string memory _name,
-        string memory _symbol
-    ) VaultBase(_evc) Owned(msg.sender) ERC4626(_asset, _name, _symbol) {}
+        ERC721 _asset
+    ) VaultBase(_evc) Owned(msg.sender) {
+        asset = _asset;
+    }
 
-    /// @notice Sets the supply cap of the vault.
+    /// @notice Sets the supply cap of the vault (amount of NFTs that someone can deposit into the vault).
     /// @param newSupplyCap The new supply cap.
     function setSupplyCap(uint256 newSupplyCap) external onlyOwner {
         supplyCap = newSupplyCap;
@@ -42,7 +54,7 @@ contract NFTVault is VaultBase, Owned, ERC721 {
     /// @return A snapshot of the vault's state.
     function doCreateVaultSnapshot() internal virtual override returns (bytes memory) {
         // make total supply snapshot here and return it:
-        return abi.encode(_convertToAssets(totalSupply, false));
+        return totalSupply;
     }
 
     /// @notice Checks the vault's status.
@@ -54,9 +66,8 @@ contract NFTVault is VaultBase, Owned, ERC721 {
 
         // validate the vault state here:
         uint256 initialSupply = abi.decode(oldSnapshot, (uint256));
-        uint256 finalSupply = _convertToAssets(totalSupply, false);
+        uint256 finalSupply = totalSupply;
 
-        // the supply cap can be implemented like this:
         if (supplyCap != 0 && finalSupply > supplyCap && finalSupply > initialSupply) {
             revert SupplyCapExceeded();
         }
@@ -74,12 +85,6 @@ contract NFTVault is VaultBase, Owned, ERC721 {
         // this vault doesn't allow borrowing, so we can't check that the account has no debt.
         // this vault should never be a controller, but user errors can happen
         EVCClient.disableController(_msgSender());
-    }
-
-    /// @notice Returns the total assets of the vault.
-    /// @return The total assets.
-    function totalAssets() public view virtual override returns (uint256) {
-        return _totalAssets;
     }
 
     /// @notice Approves a spender to spend a certain amount.
@@ -138,129 +143,48 @@ contract NFTVault is VaultBase, Owned, ERC721 {
 
         return true;
     }
-    // function transfer(address to, uint256 amount) public virtual override callThroughEVC nonReentrant returns (bool) {
-    //     address msgSender = _msgSender();
 
-    //     createVaultSnapshot();
-
-    //     balanceOf[msgSender] -= amount;
-
-    //     // Cannot overflow because the sum of all user
-    //     // balances can't exceed the max uint256 value.
-    //     unchecked {
-    //         balanceOf[to] += amount;
-    //     }
-
-    //     emit Transfer(msgSender, to, amount);
-
-    //     // despite the fact that the vault status check might not be needed for shares transfer with current logic, it's
-    //     // added here so that if anyone changes the snapshot/vault status check mechanisms in the inheriting contracts,
-    //     // they will not forget to add the vault status check here
-    //     requireAccountAndVaultStatusCheck(msgSender);
-
-    //     return true;
-    // }
-
-    /// @notice Transfers a certain amount of shares from a sender to a recipient.
-    /// @param from The sender of the transfer.
-    /// @param to The recipient of the transfer.
-    /// @param amount The amount of shares to transfer.
-    /// @return A boolean indicating whether the transfer was successful.
-    function transferFrom(
-        address from,
-        address to,
-        uint256 amount
-    ) public virtual override callThroughEVC nonReentrant returns (bool) {
-        address msgSender = _msgSender();
-
-        createVaultSnapshot();
-
-        uint256 allowed = allowance[from][msgSender]; // Saves gas for limited approvals.
-
-        if (allowed != type(uint256).max) {
-            allowance[from][msgSender] = allowed - amount;
-        }
-
-        balanceOf[from] -= amount;
-
-        // Cannot overflow because the sum of all user
-        // balances can't exceed the max uint256 value.
-        unchecked {
-            balanceOf[to] += amount;
-        }
-
-        emit Transfer(from, to, amount);
-
-        // despite the fact that the vault status check might not be needed for shares transfer with current logic, it's
-        // added here so that if anyone changes the snapshot/vault status check mechanisms in the inheriting contracts,
-        // they will not forget to add the vault status check here
-        requireAccountAndVaultStatusCheck(from);
-
-        return true;
-    }
-
-    /// @notice Deposits a certain amount of assets for a receiver.
-    /// @param assets The assets to deposit.
-    /// @param receiver The receiver of the deposit.
-    /// @return shares The shares equivalent to the deposited assets.
+    /// @notice Deposits an NFT with the certain id to the receiver.
+    /// @param id The id of NFT.
+    /// @param receiver The receiver of the NFT.
     function deposit(
-        uint256 assets,
+        uint256 id,
         address receiver
-    ) public virtual override callThroughEVC nonReentrant returns (uint256 shares) {
+    ) public virtual override callThroughEVC nonReentrant {
         address msgSender = _msgSender();
 
         createVaultSnapshot();
-
-        // Check for rounding error since we round down in previewDeposit.
-        require((shares = _convertToShares(assets, false)) != 0, "ZERO_SHARES");
 
         // Need to transfer before minting or ERC777s could reenter.
-        asset.safeTransferFrom(msgSender, address(this), assets);
+        asset.safeTransferFrom(msgSender, address(this), id);
 
-        _totalAssets += assets;
+        //increase the total amount of deposited NFTs
+        totalSupply++;
 
-        _mint(receiver, shares);
-
-        emit Deposit(msgSender, receiver, assets, shares);
+        emit Deposit(msgSender, receiver, id);
 
         requireVaultStatusCheck();
     }
 
-    /// @notice Withdraws a certain amount of assets for a receiver.
-    /// @param assets The assets to withdraw.
+    /// @notice Withdraws an NFT with certain id.
+    /// @param id The id of NFT.
     /// @param receiver The receiver of the withdrawal.
     /// @param owner The owner of the assets.
-    /// @return shares The shares equivalent to the withdrawn assets.
     function withdraw(
-        uint256 assets,
+        uint256 id,
         address receiver,
         address owner
-    ) public virtual override callThroughEVC nonReentrant returns (uint256 shares) {
+    ) public virtual override callThroughEVC nonReentrant {
         address msgSender = _msgSender();
 
         createVaultSnapshot();
 
-        shares = _convertToShares(assets, true); // No need to check for rounding error, previewWithdraw rounds up.
+        asset.safeTransferFrom(msgSender, receiver, id);
 
-        if (msgSender != owner) {
-            uint256 allowed = allowance[owner][msgSender]; // Saves gas for limited approvals.
+        totalSupply--;
 
-            if (allowed != type(uint256).max) {
-                allowance[owner][msgSender] = allowed - shares;
-            }
-        }
-
-        receiver = _getAccountOwner(receiver);
-
-        _burn(owner, shares);
-
-        emit Withdraw(msgSender, receiver, owner, assets, shares);
-
-        asset.safeTransfer(receiver, assets);
-
-        _totalAssets -= assets;
+        emit Withdraw(msgSender, receiver, owner, id);
 
         requireAccountAndVaultStatusCheck(owner);
-    }
-    
+    }   
 }
